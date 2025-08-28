@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Орбита Земли вокруг Солнца</title>
+  <style>
+    body { margin:0; overflow:hidden; }
+    canvas { display:block; }
+    #date-label, #controls {
+      position:absolute; color:white; font-family:sans-serif; font-size:16px; z-index:10;
+    }
+    #date-label { top:10px; left:10px; background:rgba(0,0,0,0.5); padding:6px 12px; border-radius:6px; }
+    #controls { bottom:20px; left:10px; background:rgba(0,0,0,0.6); padding:10px; border-radius:8px; }
+    #slider { width:300px; }
+    #playPauseBtn { margin-top:8px; width:100%; font-size:16px; }
+  </style>
+</head>
+<body>
+  <div id="date-label">Загрузка...</div>
+  <div id="controls">
+    <input type="range" id="slider" min="0" max="364" value="0">
+    <button id="playPauseBtn">⏸ Пауза</button>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/three@0.137.5/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.137.5/examples/js/controls/OrbitControls.js"></script>
+
+  <script>
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1e10);
+    camera.position.set(0,0,3e8);
+
+    const renderer = new THREE.WebGLRenderer({antialias:true});
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+
+    // Объёмная сфера-фон с текстурой космоса
+    new THREE.TextureLoader().load(
+      'https://threejs.org/examples/textures/cube/Bridge2/front.jpg',
+      texture => {
+        const sphereGeo = new THREE.SphereGeometry(1e10, 64, 64);
+        const sphereMat = new THREE.MeshBasicMaterial({ map: texture, side: THREE.BackSide });
+        scene.add(new THREE.Mesh(sphereGeo, sphereMat));
+      }
+    );
+
+    const sun = new THREE.Mesh(new THREE.SphereGeometry(7e7, 32, 32),
+      new THREE.MeshBasicMaterial({color:0xffff00}));
+    scene.add(sun);
+    const light = new THREE.PointLight(0xffffff, 1.2);
+    light.position.copy(sun.position);
+    scene.add(light);
+
+    // Орбитальная плоскость
+    const orbitPlane = new THREE.Mesh(
+      new THREE.PlaneGeometry(4e8, 4e8),
+      new THREE.MeshBasicMaterial({color:0x0000ff, side: THREE.DoubleSide, transparent:true, opacity:0.15})
+    );
+    orbitPlane.rotation.x = THREE.MathUtils.degToRad(90 - 23.4);
+    scene.add(orbitPlane);
+
+    const equatorPlane = orbitPlane.clone();
+    equatorPlane.material = new THREE.MeshBasicMaterial({color:0xff00ff, side: THREE.DoubleSide, transparent:true, opacity:0.15});
+    equatorPlane.rotation.x = THREE.MathUtils.degToRad(90);
+    scene.add(equatorPlane);
+
+    const dateLabel = document.getElementById('date-label');
+    const slider = document.getElementById('slider');
+    const playPauseBtn = document.getElementById('playPauseBtn');
+
+    let earth = null, orbitPoints = [], orbitData = [], currentIndex = 0, isPlaying = true;
+
+    playPauseBtn.addEventListener('click', () => {
+      isPlaying = !isPlaying;
+      playPauseBtn.textContent = isPlaying ? '⏸ Пауза' : '▶ Старт';
+    });
+
+    slider.addEventListener('input', () => currentIndex = parseInt(slider.value));
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth/window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    function createSeasonMarkers() {
+      const markers = [
+        {label:'Зима', color:0x00ffff, index:0},
+        {label:'Весна', color:0x00ff00, index:90},
+        {label:'Лето', color:0xff0000, index:182},
+        {label:'Осень', color:0xffa500, index:273},
+      ];
+      markers.forEach(m => {
+        const mark = new THREE.Mesh(new THREE.SphereGeometry(8e6,16,16),
+          new THREE.MeshBasicMaterial({color:m.color}));
+        mark.position.copy(orbitPoints[m.index]);
+        scene.add(mark);
+        const div = document.createElement('div');
+        div.textContent = m.label;
+        div.style.position = 'absolute';
+        div.style.color = 'white';
+        div.style.background = 'rgba(0,0,0,0.6)';
+        div.style.padding = '2px 6px';
+        div.style.borderRadius = '4px';
+        div.style.fontSize = '13px';
+        document.body.appendChild(div);
+        mark.userData.label = div;
+      });
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      if (earth && orbitPoints.length) {
+        earth.position.copy(orbitPoints[currentIndex]);
+        dateLabel.textContent = orbitData[currentIndex].date;
+        slider.value = currentIndex;
+        if (isPlaying) currentIndex = (currentIndex + 1) % orbitPoints.length;
+      }
+
+      scene.children.forEach(obj => {
+        if (obj.userData.label) {
+          const vec = obj.position.clone().project(camera);
+          const x = (vec.x * 0.5 + 0.5) * window.innerWidth;
+          const y = (-vec.y * 0.5 + 0.5) * window.innerHeight;
+          obj.userData.label.style.left = `${x}px`;
+          obj.userData.label.style.top = `${y}px`;
+        }
+      });
+
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    fetch('orbit_data.json')
+      .then(r => r.json())
+      .then(data => {
+        orbitData = data;
+        orbitPoints = data.map(e => new THREE.Vector3(
+          e.radius_km * Math.cos(e.angle_deg * Math.PI/180),
+          e.b_param,
+          e.radius_km * Math.sin(e.angle_deg * Math.PI/180)
+        ));
+        scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(orbitPoints),
+          new THREE.LineBasicMaterial({color:0x00ffff})));
+        createSeasonMarkers();
+        earth = new THREE.Mesh(new THREE.SphereGeometry(2e7,32,32),
+          new THREE.MeshPhongMaterial({color:0x0000ff}));
+        scene.add(earth);
+      });
+
+    animate();
+  </script>
+</body>
+</html>
